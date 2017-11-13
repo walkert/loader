@@ -31,21 +31,29 @@ func getPath(inPath *C.char) string {
 	return outPath
 }
 
-//export open
-func open(path *C.char, flags C.int, mode C.mode_t) int {
-	var modeInt uint32
-	filePath := getPath(path)
+func myOpen(path *C.char, flags C.int) int {
+	filePath := C.GoString(path)
 	flagInt := int(flags)
-	if flagInt&os.O_CREATE == os.O_CREATE {
-		modeInt = uint32(mode)
-	} else {
-		modeInt = 0666
+	fp, err := os.OpenFile("/tmp/dee", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		log.Fatalln(err)
 	}
-	fd, err := syscall.Open(filePath, flagInt, modeInt)
+	fp.WriteString(fmt.Sprintf("flags for %s are %d\n", filePath, flagInt))
+	defer fp.Close()
+	if flagInt&os.O_RDONLY != 0 {
+		fp.WriteString(fmt.Sprintf("This is read-only! %s\n", filePath))
+		filePath = getPath(path)
+	}
+	fd, err := syscall.Open(filePath, flagInt, 0600)
 	if err != nil {
 		return -1
 	}
 	return fd
+}
+
+//export open
+func open(path *C.char, flags C.int) int {
+	return myOpen(path, flags)
 }
 
 //export fopen
