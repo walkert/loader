@@ -11,54 +11,64 @@ import (
 	"github.com/rainycape/dl"
 	"log"
 	"os"
+	"strings"
 	"syscall"
 	"unsafe"
 )
 
-const RWRT_FROM string = "RWRT_FROM"
-const RWRT_TO string = "RWRT_TO"
+const From string = "RWRT_FROM"
+const To string = "RWRT_TO"
+const DebugString string = "LOADER_DEBUG"
+
+func logIt(message string) {
+	debugFile := os.Getenv(DebugString)
+	if debugFile == "" {
+		return
+	}
+	fp, err := os.OpenFile(debugFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	defer fp.Close()
+	fmt.Fprintln(fp, message)
+}
 
 func getPath(inPath *C.char) string {
 	outPath := C.GoString(inPath)
-	from := os.Getenv(RWRT_FROM)
-	to := os.Getenv(RWRT_TO)
+	from := os.Getenv(From)
+	to := os.Getenv(To)
 	if from == "" || to == "" {
 		return outPath
 	}
 	if outPath == from {
+		logIt(fmt.Sprintf("Matched '%s', changing to '%s'", outPath, to))
 		return to
 	}
 	return outPath
 }
 
-func myOpen(path *C.char, flags C.int) int {
+func myOpen(caller string, path *C.char, flags C.int, mode C.mode_t) int {
 	filePath := C.GoString(path)
+	logIt(fmt.Sprintf("%s called on %s", caller, filePath))
 	flagInt := int(flags)
-	fp, err := os.OpenFile("/tmp/dee", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	fp.WriteString(fmt.Sprintf("flags for %s are %d\n", filePath, flagInt))
-	defer fp.Close()
-	if flagInt&os.O_RDONLY != 0 {
-		fp.WriteString(fmt.Sprintf("This is read-only! %s\n", filePath))
+	modeInt := uint32(mode)
+	if !(flagInt&(os.O_WRONLY|os.O_CREATE|os.O_RDWR) > 0) {
 		filePath = getPath(path)
 	}
-	fd, err := syscall.Open(filePath, flagInt, 0600)
+	fd, err := syscall.Open(filePath, flagInt, modeInt)
 	if err != nil {
 		return -1
 	}
 	return fd
 }
 
-//export open
-func open(path *C.char, flags C.int) int {
-	return myOpen(path, flags)
-}
-
-//export fopen
-func fopen(path *C.char, mode *C.char) *C.FILE {
-	filePath := getPath(path)
+func myFopen(caller string, path *C.char, mode *C.char) *C.FILE {
+	filePath := C.GoString(path)
+	modeString := C.GoString(mode)
+	logIt(fmt.Sprintf("%s called on %s", caller, filePath))
+	if !strings.Contains(modeString, "w") {
+		filePath = getPath(path)
+	}
 	var returnPath *C.char = C.CString(filePath)
 	defer C.free(unsafe.Pointer(returnPath))
 	lib, err := dl.Open("libc", 0)
@@ -73,21 +83,19 @@ func fopen(path *C.char, mode *C.char) *C.FILE {
 	return origFopen(returnPath, mode)
 }
 
+//export open
+func open(path *C.char, flags C.int, mode C.mode_t) int {
+	return myOpen("open", path, flags, mode)
+}
+
+//export fopen
+func fopen(path *C.char, mode *C.char) *C.FILE {
+	return myFopen("fopen", path, mode)
+}
+
 //export fopen64
 func fopen64(path *C.char, mode *C.char) *C.FILE {
-	filePath := getPath(path)
-	var returnPath *C.char = C.CString(filePath)
-	defer C.free(unsafe.Pointer(returnPath))
-	lib, err := dl.Open("libc", 0)
-	if err != nil {
-		log.Fatal("Unable to dlopen libc:", err)
-	}
-	var origFopen64 func(p, m *C.char) *C.FILE
-	err = lib.Sym("fopen64", &origFopen64)
-	if err != nil {
-		log.Fatal("Unable to load fopen64:", err)
-	}
-	return origFopen64(returnPath, mode)
+	return myFopen("fopen64", path, mode)
 }
 
 func main() {}
